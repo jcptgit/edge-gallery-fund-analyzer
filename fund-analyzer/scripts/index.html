@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fund Analyzer</title>
+</head>
+<body>
+  <script>
+    const FMP_BASE = 'https://financialmodelingprep.com/stable';
+
+    /**
+     * Fetch JSON from FMP API with error handling.
+     */
+    async function fmpFetch(endpoint, apiKey) {
+      const separator = endpoint.includes('?') ? '&' : '?';
+      const url = `${FMP_BASE}${endpoint}${separator}apikey=${apiKey}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`FMP API error (${res.status}): ${res.statusText}`);
+      }
+      return res.json();
+    }
+
+    /**
+     * Search for a symbol by ISIN.
+     * Returns the first match or null.
+     */
+    async function searchByISIN(isin, apiKey) {
+      const data = await fmpFetch(`/search-isin?isin=${encodeURIComponent(isin)}`, apiKey);
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    }
+
+    /**
+     * Get company/fund profile by symbol.
+     */
+    async function getProfile(symbol, apiKey) {
+      const data = await fmpFetch(`/profile?symbol=${encodeURIComponent(symbol)}`, apiKey);
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    }
+
+    /**
+     * Get ETF sector weightings.
+     */
+    async function getSectorWeightings(symbol, apiKey) {
+      try {
+        const data = await fmpFetch(`/etf/sector-weightings?symbol=${encodeURIComponent(symbol)}`, apiKey);
+        if (Array.isArray(data) && data.length > 0) {
+          return data;
+        }
+      } catch (e) {
+        console.warn('Sector weightings not available:', e.message);
+      }
+      return null;
+    }
+
+    /**
+     * Get ETF country weightings.
+     */
+    async function getCountryWeightings(symbol, apiKey) {
+      try {
+        const data = await fmpFetch(`/etf/country-weightings?symbol=${encodeURIComponent(symbol)}`, apiKey);
+        if (Array.isArray(data) && data.length > 0) {
+          return data;
+        }
+      } catch (e) {
+        console.warn('Country weightings not available:', e.message);
+      }
+      return null;
+    }
+
+    /**
+     * Get ETF top holdings.
+     */
+    async function getHoldings(symbol, apiKey) {
+      try {
+        const data = await fmpFetch(`/etf/holdings?symbol=${encodeURIComponent(symbol)}`, apiKey);
+        if (Array.isArray(data) && data.length > 0) {
+          // Return top 10 holdings sorted by weight
+          return data
+            .filter(h => h.weightPercentage != null)
+            .sort((a, b) => parseFloat(b.weightPercentage) - parseFloat(a.weightPercentage))
+            .slice(0, 10);
+        }
+      } catch (e) {
+        console.warn('Holdings not available:', e.message);
+      }
+      return null;
+    }
+
+    /**
+     * Format a number as percentage string.
+     */
+    function pct(value) {
+      if (value == null || isNaN(value)) return 'N/A';
+      return (parseFloat(value)).toFixed(2) + '%';
+    }
+
+    /**
+     * Format a number with comma separators.
+     */
+    function fmtNum(value) {
+      if (value == null || isNaN(value)) return 'N/A';
+      return Number(value).toLocaleString('en-US');
+    }
+
+    /**
+     * Format currency.
+     */
+    function fmtCurrency(value, currency) {
+      if (value == null || isNaN(value)) return 'N/A';
+      const cur = currency || 'USD';
+      return Number(value).toLocaleString('en-US', {
+        style: 'currency',
+        currency: cur,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    /**
+     * Build a formatted text report from the collected data.
+     */
+    function buildReport(isin, profile, sectorWeightings, countryWeightings, holdings) {
+      let report = '';
+
+      // --- Profile ---
+      if (profile) {
+        report += '📋 FUND PROFILE\n';
+        report += `• Name: ${profile.companyName || 'N/A'}\n`;
+        report += `• Symbol: ${profile.symbol || 'N/A'}\n`;
+        report += `• ISIN: ${isin}\n`;
+        report += `• Type: ${profile.isEtf ? 'ETF' : (profile.isFund ? 'Mutual Fund' : profile.sector || 'N/A')}\n`;
+        report += `• Exchange: ${profile.exchangeShortName || profile.exchange || 'N/A'}\n`;
+        report += `• Currency: ${profile.currency || 'N/A'}\n`;
+        report += `• Sector: ${profile.sector || 'N/A'}\n`;
+        report += `• Industry: ${profile.industry || 'N/A'}\n`;
+        if (profile.description) {
+          const desc = profile.description.length > 300
+            ? profile.description.substring(0, 300) + '...'
+            : profile.description;
+          report += `• Description: ${desc}\n`;
+        }
+        report += '\n';
+
+        // --- Performance ---
+        report += '📈 PERFORMANCE & PRICE\n';
+        report += `• Price: ${fmtCurrency(profile.price, profile.currency)}\n`;
+        report += `• Change: ${fmtCurrency(profile.changes, profile.currency)} (${pct(profile.changesPercentage)})\n`;
+        report += `• 52-Week Range: ${fmtCurrency(profile.range?.split('-')[0]?.trim(), profile.currency)} - ${fmtCurrency(profile.range?.split('-')[1]?.trim(), profile.currency)}\n`;
+        report += `• Beta: ${profile.beta != null ? profile.beta.toFixed(3) : 'N/A'}\n`;
+        report += `• Volume: ${fmtNum(profile.volAvg)} (avg)\n`;
+        report += `• Market Cap: ${fmtCurrency(profile.mktCap, profile.currency)}\n`;
+        if (profile.lastDiv != null) {
+          report += `• Last Dividend: ${fmtCurrency(profile.lastDiv, profile.currency)}\n`;
+        }
+        report += '\n';
+      }
+
+      // --- Holdings ---
+      if (holdings && holdings.length > 0) {
+        report += '🏢 TOP HOLDINGS\n';
+        holdings.forEach((h, i) => {
+          const name = h.name || h.asset || h.symbol || 'Unknown';
+          const weight = h.weightPercentage != null ? pct(h.weightPercentage) : 'N/A';
+          report += `${i + 1}. ${name} — ${weight}\n`;
+        });
+        report += '\n';
+      }
+
+      // --- Sector Weightings ---
+      if (sectorWeightings && sectorWeightings.length > 0) {
+        report += '🏗️ SECTOR WEIGHTINGS\n';
+        sectorWeightings.forEach(s => {
+          const sector = s.sector || 'Unknown';
+          const weight = s.weightPercentage != null ? pct(s.weightPercentage) : 'N/A';
+          report += `• ${sector}: ${weight}\n`;
+        });
+        report += '\n';
+      }
+
+      // --- Country Weightings ---
+      if (countryWeightings && countryWeightings.length > 0) {
+        report += '🌍 COUNTRY WEIGHTINGS\n';
+        countryWeightings.forEach(c => {
+          const country = c.country || 'Unknown';
+          const weight = c.weightPercentage != null ? pct(c.weightPercentage) : 'N/A';
+          report += `• ${country}: ${weight}\n`;
+        });
+        report += '\n';
+      }
+
+      // --- Fees ---
+      if (profile) {
+        report += '💰 FEES & KEY DATA\n';
+        if (profile.isEtf || profile.isFund) {
+          report += `• NAV: ${profile.price != null ? fmtCurrency(profile.price, profile.currency) : 'N/A'}\n`;
+        }
+        report += `• Total Assets (Market Cap): ${fmtCurrency(profile.mktCap, profile.currency)}\n`;
+        report += `• Average Volume: ${fmtNum(profile.volAvg)}\n`;
+        report += `• IPO Date: ${profile.ipoDate || 'N/A'}\n`;
+        report += '\n';
+      }
+
+      report += '⚠️ Data provided by Financial Modeling Prep. Not financial advice.\n';
+
+      return report;
+    }
+
+    /**
+     * Main entry point called by Edge Gallery.
+     */
+    window['ai_edge_gallery_get_result'] = async (data, secret) => {
+      try {
+        const jsonData = JSON.parse(data);
+        const isin = jsonData.isin;
+
+        if (!isin) {
+          return JSON.stringify({ error: 'No ISIN code provided. Please provide a valid ISIN (e.g., LU0690375182).' });
+        }
+
+        if (!secret) {
+          return JSON.stringify({ error: 'No API key provided. Please enter your Financial Modeling Prep API key.' });
+        }
+
+        // Validate ISIN format: 2 letters + 10 alphanumeric characters
+        const isinRegex = /^[A-Z]{2}[A-Z0-9]{10}$/;
+        if (!isinRegex.test(isin.toUpperCase())) {
+          return JSON.stringify({ error: `Invalid ISIN format: "${isin}". Expected format: 2 letters + 10 alphanumeric characters (e.g., LU0690375182).` });
+        }
+
+        const cleanISIN = isin.toUpperCase().trim();
+
+        // Step 1: Search by ISIN to get the ticker symbol
+        const searchResult = await searchByISIN(cleanISIN, secret);
+
+        if (!searchResult || !searchResult.symbol) {
+          return JSON.stringify({
+            error: `No fund found for ISIN "${cleanISIN}" in the Financial Modeling Prep database. This may be because:\n- The ISIN is incorrect\n- The fund is not covered by FMP (mainly covers US-listed securities)\n- Try searching by ticker symbol instead`
+          });
+        }
+
+        const symbol = searchResult.symbol;
+
+        // Step 2: Fetch all data in parallel
+        const [profile, sectorWeightings, countryWeightings, holdings] = await Promise.all([
+          getProfile(symbol, secret),
+          getSectorWeightings(symbol, secret),
+          getCountryWeightings(symbol, secret),
+          getHoldings(symbol, secret)
+        ]);
+
+        if (!profile) {
+          return JSON.stringify({
+            error: `Found symbol "${symbol}" for ISIN "${cleanISIN}", but could not retrieve profile data.`
+          });
+        }
+
+        // Step 3: Build the report
+        const report = buildReport(cleanISIN, profile, sectorWeightings, countryWeightings, holdings);
+
+        return JSON.stringify({ result: report });
+
+      } catch (e) {
+        console.error('Fund Analyzer error:', e);
+        return JSON.stringify({ error: `Fund analysis failed: ${e.message}` });
+      }
+    };
+  </script>
+</body>
+</html>
