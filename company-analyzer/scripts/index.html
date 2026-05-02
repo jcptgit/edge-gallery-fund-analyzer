@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Company Analyzer</title>
+</head>
+<body>
+  <script>
+    const FMP_BASE = 'https://financialmodelingprep.com/stable';
+
+    /**
+     * Fetch JSON from FMP API with error handling.
+     */
+    async function fmpFetch(endpoint, apiKey) {
+      const separator = endpoint.includes('?') ? '&' : '?';
+      const url = `${FMP_BASE}${endpoint}${separator}apikey=${apiKey}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`FMP API error (${res.status}): ${res.statusText}`);
+      }
+      return res.json();
+    }
+
+    /**
+     * Search for a company by name. Returns the best match symbol.
+     */
+    async function searchCompany(query, apiKey) {
+      const data = await fmpFetch(`/search-name?query=${encodeURIComponent(query)}`, apiKey);
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    }
+
+    /**
+     * Get real-time stock quote.
+     */
+    async function getQuote(symbol, apiKey) {
+      const data = await fmpFetch(`/quote?symbol=${encodeURIComponent(symbol)}`, apiKey);
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    }
+
+    /**
+     * Get detailed company profile.
+     */
+    async function getProfile(symbol, apiKey) {
+      const data = await fmpFetch(`/profile?symbol=${encodeURIComponent(symbol)}`, apiKey);
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    }
+
+    /**
+     * Get income statements (annual + quarterly).
+     */
+    async function getIncomeStatements(symbol, apiKey) {
+      try {
+        const data = await fmpFetch(`/income-statement?symbol=${encodeURIComponent(symbol)}&limit=5`, apiKey);
+        if (Array.isArray(data) && data.length > 0) {
+          return data;
+        }
+      } catch (e) {
+        console.warn('Income statements not available:', e.message);
+      }
+      return null;
+    }
+
+    /**
+     * Format a number with comma separators.
+     */
+    function fmtNum(value) {
+      if (value == null || isNaN(value)) return 'N/A';
+      return Number(value).toLocaleString('en-US');
+    }
+
+    /**
+     * Format a large number in a human-readable way (B/M/K).
+     */
+    function fmtLargeNum(value, currency) {
+      if (value == null || isNaN(value)) return 'N/A';
+      const num = Number(value);
+      const cur = currency || 'USD';
+      let formatted;
+      if (Math.abs(num) >= 1e12) {
+        formatted = (num / 1e12).toFixed(2) + 'T';
+      } else if (Math.abs(num) >= 1e9) {
+        formatted = (num / 1e9).toFixed(2) + 'B';
+      } else if (Math.abs(num) >= 1e6) {
+        formatted = (num / 1e6).toFixed(2) + 'M';
+      } else if (Math.abs(num) >= 1e3) {
+        formatted = (num / 1e3).toFixed(2) + 'K';
+      } else {
+        formatted = num.toFixed(2);
+      }
+      return `${cur} ${formatted}`;
+    }
+
+    /**
+     * Format currency value.
+     */
+    function fmtCurrency(value, currency) {
+      if (value == null || isNaN(value)) return 'N/A';
+      const cur = currency || 'USD';
+      return Number(value).toLocaleString('en-US', {
+        style: 'currency',
+        currency: cur,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    /**
+     * Format percentage.
+     */
+    function pct(value) {
+      if (value == null || isNaN(value)) return 'N/A';
+      return parseFloat(value).toFixed(2) + '%';
+    }
+
+    /**
+     * Calculate margin as percentage.
+     */
+    function margin(part, total) {
+      if (part == null || total == null || total === 0) return 'N/A';
+      return ((part / total) * 100).toFixed(2) + '%';
+    }
+
+    /**
+     * Build the formatted text report.
+     */
+    function buildReport(profile, quote, incomeStatements) {
+      let report = '';
+      const cur = profile?.currency || quote?.currency || 'USD';
+
+      // --- Company Profile ---
+      if (profile) {
+        report += '🏢 COMPANY PROFILE\n';
+        report += `• Name: ${profile.companyName || 'N/A'}\n`;
+        report += `• Symbol: ${profile.symbol || 'N/A'}\n`;
+        report += `• Exchange: ${profile.exchangeShortName || profile.exchange || 'N/A'}\n`;
+        report += `• Sector: ${profile.sector || 'N/A'}\n`;
+        report += `• Industry: ${profile.industry || 'N/A'}\n`;
+        report += `• CEO: ${profile.ceo || 'N/A'}\n`;
+        report += `• Employees: ${profile.fullTimeEmployees ? fmtNum(profile.fullTimeEmployees) : 'N/A'}\n`;
+        report += `• Country: ${profile.country || 'N/A'}\n`;
+        report += `• Website: ${profile.website || 'N/A'}\n`;
+        if (profile.description) {
+          const desc = profile.description.length > 400
+            ? profile.description.substring(0, 400) + '...'
+            : profile.description;
+          report += `• Description: ${desc}\n`;
+        }
+        report += '\n';
+      }
+
+      // --- Stock Quote ---
+      if (quote) {
+        report += '📈 STOCK PRICE & MARKET DATA\n';
+        report += `• Price: ${fmtCurrency(quote.price, cur)}\n`;
+        report += `• Change: ${fmtCurrency(quote.change, cur)} (${pct(quote.changesPercentage)})\n`;
+        report += `• Day Range: ${fmtCurrency(quote.dayLow, cur)} — ${fmtCurrency(quote.dayHigh, cur)}\n`;
+        report += `• 52-Week Range: ${fmtCurrency(quote.yearLow, cur)} — ${fmtCurrency(quote.yearHigh, cur)}\n`;
+        report += `• Market Cap: ${fmtLargeNum(quote.marketCap, cur)}\n`;
+        report += `• Volume: ${fmtNum(quote.volume)}\n`;
+        report += `• Avg Volume: ${fmtNum(quote.avgVolume)}\n`;
+        report += `• P/E Ratio: ${quote.pe != null ? quote.pe.toFixed(2) : 'N/A'}\n`;
+        report += `• EPS: ${fmtCurrency(quote.eps, cur)}\n`;
+        if (quote.earningsAnnouncement) {
+          report += `• Next Earnings: ${quote.earningsAnnouncement.split('T')[0]}\n`;
+        }
+        report += '\n';
+      } else if (profile) {
+        // Fallback to profile price data if quote not available
+        report += '📈 STOCK PRICE & MARKET DATA\n';
+        report += `• Price: ${fmtCurrency(profile.price, cur)}\n`;
+        report += `• Change: ${fmtCurrency(profile.changes, cur)}\n`;
+        report += `• 52-Week Range: ${profile.range || 'N/A'}\n`;
+        report += `• Market Cap: ${fmtLargeNum(profile.mktCap, cur)}\n`;
+        report += `• Beta: ${profile.beta != null ? profile.beta.toFixed(3) : 'N/A'}\n`;
+        report += `• Avg Volume: ${fmtNum(profile.volAvg)}\n`;
+        report += `• Last Dividend: ${fmtCurrency(profile.lastDiv, cur)}\n`;
+        report += '\n';
+      }
+
+      // --- Income Statement (Annual) ---
+      if (incomeStatements && incomeStatements.length > 0) {
+        // Find the latest annual report
+        const annual = incomeStatements.find(s => s.period === 'FY') || incomeStatements[0];
+        if (annual) {
+          const period = annual.calendarYear
+            ? `${annual.calendarYear}`
+            : (annual.date ? annual.date.split('-')[0] : 'Latest');
+
+          report += `💹 INCOME STATEMENT (${period})\n`;
+          report += `• Revenue: ${fmtLargeNum(annual.revenue, cur)}\n`;
+          if (annual.revenueGrowth != null) {
+            report += `• Revenue Growth: ${pct(annual.revenueGrowth * 100)}\n`;
+          }
+          report += `• Cost of Revenue: ${fmtLargeNum(annual.costOfRevenue, cur)}\n`;
+          report += `• Gross Profit: ${fmtLargeNum(annual.grossProfit, cur)} (margin: ${margin(annual.grossProfit, annual.revenue)})\n`;
+          report += `• Operating Expenses: ${fmtLargeNum(annual.operatingExpenses, cur)}\n`;
+          report += `• Operating Income: ${fmtLargeNum(annual.operatingIncome, cur)} (margin: ${margin(annual.operatingIncome, annual.revenue)})\n`;
+          report += `• Net Income: ${fmtLargeNum(annual.netIncome, cur)} (margin: ${margin(annual.netIncome, annual.revenue)})\n`;
+          report += `• EPS: ${fmtCurrency(annual.eps, cur)}\n`;
+          report += `• EPS Diluted: ${fmtCurrency(annual.epsdiluted, cur)}\n`;
+          report += `• EBITDA: ${fmtLargeNum(annual.ebitda, cur)}\n`;
+          report += `• R&D Expenses: ${fmtLargeNum(annual.researchAndDevelopmentExpenses, cur)}\n`;
+          report += '\n';
+        }
+
+        // Year-over-year comparison if we have 2+ years
+        if (incomeStatements.length >= 2) {
+          const latest = incomeStatements[0];
+          const previous = incomeStatements[1];
+          if (latest.revenue && previous.revenue) {
+            const revenueGrowth = ((latest.revenue - previous.revenue) / Math.abs(previous.revenue)) * 100;
+            const netIncomeGrowth = (latest.netIncome && previous.netIncome)
+              ? ((latest.netIncome - previous.netIncome) / Math.abs(previous.netIncome)) * 100
+              : null;
+
+            report += '📊 YEAR-OVER-YEAR GROWTH\n';
+            const latestYear = latest.calendarYear || latest.date?.split('-')[0] || 'Latest';
+            const prevYear = previous.calendarYear || previous.date?.split('-')[0] || 'Previous';
+            report += `• Period: ${prevYear} → ${latestYear}\n`;
+            report += `• Revenue Growth: ${pct(revenueGrowth)}\n`;
+            if (netIncomeGrowth != null) {
+              report += `• Net Income Growth: ${pct(netIncomeGrowth)}\n`;
+            }
+            report += '\n';
+          }
+        }
+      }
+
+      report += '⚠️ Data provided by Financial Modeling Prep. Not financial advice.\n';
+
+      return report;
+    }
+
+    /**
+     * Determine if the query looks like a ticker symbol.
+     * Tickers are typically 1-5 uppercase letters, sometimes with a dot.
+     */
+    function looksLikeTicker(query) {
+      return /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(query.trim().toUpperCase());
+    }
+
+    /**
+     * Main entry point called by Edge Gallery.
+     */
+    window['ai_edge_gallery_get_result'] = async (data, secret) => {
+      try {
+        const jsonData = JSON.parse(data);
+        const query = jsonData.query;
+
+        if (!query) {
+          return JSON.stringify({ error: 'No company name or ticker provided. Please specify a company (e.g., "Apple" or "AAPL").' });
+        }
+
+        if (!secret) {
+          return JSON.stringify({ error: 'No API key provided. Please enter your Financial Modeling Prep API key.' });
+        }
+
+        let symbol = null;
+
+        // If it looks like a ticker, use it directly; otherwise search by name
+        if (looksLikeTicker(query)) {
+          symbol = query.trim().toUpperCase();
+        } else {
+          const searchResult = await searchCompany(query, secret);
+          if (!searchResult || !searchResult.symbol) {
+            return JSON.stringify({
+              error: `No company found matching "${query}". Try using the ticker symbol directly (e.g., "AAPL" for Apple, "MSFT" for Microsoft).`
+            });
+          }
+          symbol = searchResult.symbol;
+        }
+
+        // Fetch all data in parallel
+        const [profile, quote, incomeStatements] = await Promise.all([
+          getProfile(symbol, secret),
+          getQuote(symbol, secret),
+          getIncomeStatements(symbol, secret)
+        ]);
+
+        if (!profile && !quote) {
+          return JSON.stringify({
+            error: `Could not retrieve data for "${symbol}". The ticker may not be covered by Financial Modeling Prep or may be incorrect.`
+          });
+        }
+
+        // Build the report
+        const report = buildReport(profile, quote, incomeStatements);
+
+        return JSON.stringify({ result: report });
+
+      } catch (e) {
+        console.error('Company Analyzer error:', e);
+        return JSON.stringify({ error: `Company analysis failed: ${e.message}` });
+      }
+    };
+  </script>
+</body>
+</html>
